@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 
 const COMMAND_TOPIC = "/joint_position_controller/commands";
 const COMMAND_SCHEMA = "std_msgs/msg/Float64MultiArray";
+const WHEEL_TOPIC = "/velocity_position_controller/commands";
 
 type Float64MultiArray = {
   layout: {
@@ -22,6 +23,8 @@ function JointControl({ context }: JointControlProps): React.JSX.Element {
   const [swivel, setSwivel] = useState(0);
   const [left, setLeft] = useState(0);
   const [right, setRight] = useState(0);
+  const [G0, setG0] = useState(0);
+  const [G1, setG1] = useState(0);
 
   const [publishingAvailable, setPublishingAvailable] = useState(
     context.advertise != undefined && context.publish != undefined,
@@ -51,11 +54,11 @@ function JointControl({ context }: JointControlProps): React.JSX.Element {
         dim: [],
         data_offset: 0,
       },
-      data: [swivel, left, right],
+      data: [swivel, left, right, G0, G1],
     };
 
     context.publish(COMMAND_TOPIC, message);
-  }, [context, swivel, left, right]);
+  }, [context, swivel, left, right, G0, G1]);
 
   const stopAndHold = useCallback(() => {
     /*
@@ -118,6 +121,26 @@ function JointControl({ context }: JointControlProps): React.JSX.Element {
         max={1}
         step={0.005}
         onChange={setRight}
+      />
+
+      <JointInput
+        label="G0 revolute joint"
+        units="rad"
+        value={G0}
+        min={-3.14}
+        max={3.14}
+        step={0.01}
+        onChange={setG0}
+      />
+
+      <JointInput
+        label="G1 revolute joint"
+        units="rad"
+        value={G1}
+        min={-3.14}
+        max={3.14}
+        step={0.01}
+        onChange={setG1}
       />
 
       <button
