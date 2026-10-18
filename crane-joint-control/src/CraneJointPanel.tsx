@@ -1,248 +1,110 @@
-import {
-  PanelExtensionContext} from "@foxglove/extension";
+import { PanelExtensionContext } from "@foxglove/extension";
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-const COMMAND_TOPIC = "/joint_position_controller/commands";
-const COMMAND_SCHEMA = "std_msgs/msg/Float64MultiArray";
-const WHEEL_TOPIC = "/velocity_position_controller/commands";
+const POSITION_TOPIC = "/joint_position_controller/commands";
+const WHEEL_TOPIC = "/wheel_velocity_controller/commands";
+const SCHEMA = "std_msgs/msg/Float64MultiArray";
+const RPM_PRESETS = [0, 1000, 2000, 3000, 4000] as const;
+const RPM_TO_RAD_S = (2 * Math.PI) / 60;
 
-type Float64MultiArray = {
-  layout: {
-    dim: unknown[];
-    data_offset: number;
-  };
-  data: number[];
-};
+type ArrayMessage = { layout: { dim: never[]; data_offset: number }; data: number[] };
+const arrayMessage = (data: number[]): ArrayMessage => ({ layout: { dim: [], data_offset: 0 }, data });
+type Axis = { name: string; unit: string; min: number; max: number; step: number };
+const AXES: Axis[] = [
+  { name: "Swivel", unit: "rad", min: -3.14, max: 3.14, step: 0.01 },
+  { name: "Left carriage", unit: "m", min: 0, max: 1, step: 0.005 },
+  { name: "Right carriage", unit: "m", min: 0, max: 1, step: 0.005 },
+  { name: "G0 gimbal", unit: "rad", min: -3.14, max: 3.14, step: 0.01 },
+  { name: "G1 gimbal", unit: "rad", min: -3.14, max: 3.14, step: 0.01 },
+];
 
-type JointControlProps = {
-  context: PanelExtensionContext;
-};
-
-function JointControl({ context }: JointControlProps): React.JSX.Element {
-  const [swivel, setSwivel] = useState(0);
-  const [left, setLeft] = useState(0);
-  const [right, setRight] = useState(0);
-  const [G0, setG0] = useState(0);
-  const [G1, setG1] = useState(0);
-
-  const [publishingAvailable, setPublishingAvailable] = useState(
-    context.advertise != undefined && context.publish != undefined,
-  );
+function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.Element {
+  const [positions, setPositions] = useState<number[]>([0, 0, 0, 0, 0]);
+  const [jogSteps, setJogSteps] = useState<number[]>([0.01, 0.005, 0.005, 0.01, 0.01]);
+  const [wheelRpm, setWheelRpm] = useState<number[]>([0, 0]);
+  const [status, setStatus] = useState("Targets are local until you send them.");
+  const available = context.advertise != undefined && context.publish != undefined;
 
   useEffect(() => {
-    if (context.advertise == undefined) {
-      setPublishingAvailable(false);
-      return;
-    }
-
-    context.advertise(COMMAND_TOPIC, COMMAND_SCHEMA);
-
+    if (!context.advertise || !context.publish) return;
+    context.advertise(POSITION_TOPIC, SCHEMA);
+    context.advertise(WHEEL_TOPIC, SCHEMA);
     return () => {
-      context.unadvertise?.(COMMAND_TOPIC);
+      context.unadvertise?.(POSITION_TOPIC);
+      context.unadvertise?.(WHEEL_TOPIC);
     };
+  }, [context, available]);
+
+  const publishPositions = useCallback((values: number[]) => {
+    if (!context.publish) return;
+    context.publish(POSITION_TOPIC, arrayMessage(values));
+    setStatus(`Sent five-axis position target.`);
   }, [context]);
 
-  const publishPositions = useCallback(() => {
-    if (context.publish == undefined) {
-      console.error("Current Foxglove connection does not support publishing");
-      return;
-    }
+  const publishWheels = useCallback((values: number[]) => {
+    if (!context.publish) return;
+    context.publish(WHEEL_TOPIC, arrayMessage(values.map((rpm) => rpm * RPM_TO_RAD_S)));
+    setStatus(`Requested wheel RPM: G0=${values[0]}, G1=${values[1]}.`);
+  }, [context]);
 
-    const message: Float64MultiArray = {
-      layout: {
-        dim: [],
-        data_offset: 0,
-      },
-      data: [swivel, left, right, G0, G1],
-    };
-
-    context.publish(COMMAND_TOPIC, message);
-  }, [context, swivel, left, right, G0, G1]);
-
-  const stopAndHold = useCallback(() => {
-    /*
-     * For a position controller, "stop" means stop changing the target.
-     * Publishing zeros would command the crane to move to zero, so this
-     * button simply republishes the current target.
-     */
-    publishPositions();
-  }, [publishPositions]);
-
-  return (
-    <div
-      style={{
-        padding: "1rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "1rem",
-        fontFamily: "sans-serif",
-      }}
-    >
-      <h2 style={{ margin: 0 }}>Crane Joint Control</h2>
-
-      {!publishingAvailable && (
-        <div
-          style={{
-            padding: "0.75rem",
-            border: "1px solid",
-            borderRadius: "4px",
-          }}
-        >
-          The current Foxglove connection does not support publishing.
-        </div>
-      )}
-
-      <JointInput
-        label="Swivel"
-        units="rad"
-        value={swivel}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        onChange={setSwivel}
-      />
-
-      <JointInput
-        label="Left linear joint"
-        units="m"
-        value={left}
-        min={0}
-        max={1}
-        step={0.005}
-        onChange={setLeft}
-      />
-
-      <JointInput
-        label="Right linear joint"
-        units="m"
-        value={right}
-        min={0}
-        max={1}
-        step={0.005}
-        onChange={setRight}
-      />
-
-      <JointInput
-        label="G0 revolute joint"
-        units="rad"
-        value={G0}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        onChange={setG0}
-      />
-
-      <JointInput
-        label="G1 revolute joint"
-        units="rad"
-        value={G1}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        onChange={setG1}
-      />
-
-      <button
-        disabled={!publishingAvailable}
-        onClick={publishPositions}
-        style={{
-          padding: "0.75rem",
-          fontSize: "1rem",
-          cursor: publishingAvailable ? "pointer" : "not-allowed",
-        }}
-      >
-        Send joint target
-      </button>
-
-      <button
-        disabled={!publishingAvailable}
-        onClick={stopAndHold}
-        style={{
-          padding: "0.75rem",
-          fontSize: "1rem",
-          cursor: publishingAvailable ? "pointer" : "not-allowed",
-        }}
-      >
-        Hold current target
-      </button>
-
-      <code style={{ wordBreak: "break-all" }}>
-        {COMMAND_TOPIC}
-      </code>
-    </div>
-  );
-}
-
-type JointInputProps = {
-  label: string;
-  units: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-};
-
-function JointInput({
-  label,
-  units,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-}: JointInputProps): React.JSX.Element {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-      <span>
-        {label}: {value.toFixed(3)} {units}
-      </span>
-
-      <input
-        type="range"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => {
-          const parsed = Number(event.target.value);
-
-          if (Number.isFinite(parsed)) {
-            onChange(Math.min(max, Math.max(min, parsed)));
-          }
-        }}
-      />
-    </label>
-  );
-}
-
-export function initCraneJointPanel(
-  context: PanelExtensionContext,
-): () => void {
-  const root = createRoot(context.panelElement);
-
-  root.render(<JointControl context={context} />);
-
-  // context.onRender = (
-  //   _renderState: RenderState,
-  //   done: () => void,
-  // ): void => {
-  //   done();
-  // };
-
-  context.watch("currentTime");
-
-  return () => {
-    root.unmount();
+  const updatePosition = (index: number, value: number) => {
+    setPositions((previous) => previous.map((v, i) => i === index ? value : v));
   };
+  const jog = (index: number, direction: -1 | 1) => {
+    const axis = AXES[index]!;
+    const next = positions.map((v, i) => i === index
+      ? Math.max(axis.min, Math.min(axis.max, v + direction * jogSteps[index]!)) : v);
+    setPositions(next);
+    publishPositions(next);
+  };
+  const updateWheel = (index: number, rpm: number) => {
+    const next = wheelRpm.map((v, i) => i === index ? rpm : v);
+    setWheelRpm(next);
+    publishWheels(next);
+  };
+  const buttonStyle: React.CSSProperties = { padding: "0.45rem 0.7rem", cursor: available ? "pointer" : "not-allowed" };
+
+  return <div style={{ fontFamily: "sans-serif", padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+    <h2 style={{ margin: 0 }}>Crane manual control</h2>
+    {!available && <strong>Publishing unavailable on this Foxglove connection.</strong>}
+    <div style={{ fontSize: 12, opacity: 0.8 }}>Jogging sends a complete five-axis position target. Verify the initial targets before enabling motion.</div>
+    <h3 style={{ marginBottom: 0 }}>Position axes</h3>
+    {AXES.map((axis, index) => <div key={axis.name} style={{ border: "1px solid #7775", padding: 10, borderRadius: 6 }}>
+      <label style={{ display: "block", marginBottom: 6 }}>{axis.name} ({axis.unit})</label>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <button disabled={!available} style={buttonStyle} onClick={() => jog(index, -1)}>− Jog</button>
+        <input aria-label={`${axis.name} target`} type="number" min={axis.min} max={axis.max} step={axis.step}
+          value={positions[index]} onChange={(e) => {
+            const n = Number(e.target.value);
+            if (e.target.value !== "" && Number.isFinite(n)) updatePosition(index, Math.max(axis.min, Math.min(axis.max, n)));
+          }} style={{ width: 85 }} />
+        <button disabled={!available} style={buttonStyle} onClick={() => jog(index, 1)}>+ Jog</button>
+        <label>Jog size <input aria-label={`${axis.name} jog size`} type="number" min={0.0001} step={axis.step}
+          value={jogSteps[index]} onChange={(e) => {
+            const n = Number(e.target.value);
+            if (n > 0 && Number.isFinite(n)) setJogSteps((old) => old.map((v, i) => i === index ? n : v));
+          }} style={{ width: 72 }} /></label>
+      </div>
+    </div>)}
+    <button disabled={!available} style={buttonStyle} onClick={() => publishPositions(positions)}>Send all five position targets</button>
+    <h3 style={{ marginBottom: 0 }}>BLDC wheel groups</h3>
+    {[0, 1].map((index) => <div key={index} style={{ border: "1px solid #7775", padding: 10, borderRadius: 6 }}>
+      <div style={{ marginBottom: 8 }}>G{index} target: <strong>{wheelRpm[index]} RPM</strong> ({(wheelRpm[index]! * RPM_TO_RAD_S).toFixed(1)} rad/s)</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {RPM_PRESETS.map((rpm) => <button key={rpm} disabled={!available} style={{ ...buttonStyle, fontWeight: wheelRpm[index] === rpm ? "bold" : "normal" }}
+          onClick={() => updateWheel(index, rpm)}>{rpm}</button>)}
+      </div>
+    </div>)}
+    <button disabled={!available} style={{ ...buttonStyle, fontWeight: "bold" }} onClick={() => { setWheelRpm([0, 0]); publishWheels([0, 0]); }}>Command both wheel groups to 0 RPM</button>
+    <small>RPM presets are target setpoints, not a timed acceleration ramp. A real ramp requires rate limiting in the controller/firmware.</small>
+    <div role="status" style={{ fontSize: 12 }}>{status}</div>
+    <code style={{ fontSize: 11, overflowWrap: "anywhere" }}>{POSITION_TOPIC}<br />{WHEEL_TOPIC}</code>
+  </div>;
+}
+
+export function initCraneJointPanel(context: PanelExtensionContext): () => void {
+  const root = createRoot(context.panelElement);
+  root.render(<CranePanel context={context} />);
+  return () => root.unmount();
 }
