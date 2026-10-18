@@ -18,6 +18,7 @@ const JOINTS = [
 
 type ArrayMessage = { layout: { dim: never[]; data_offset: number }; data: number[] };
 type JointState = { name?: string[]; position?: number[]; velocity?: number[] };
+type Pair = [number, number];
 const clamp = (x: number, min: number, max: number) => Math.min(max, Math.max(min, x));
 const arrayMessage = (data: number[]): ArrayMessage => ({ layout: { dim: [], data_offset: 0 }, data });
 const rpmToRadSec = (rpm: number) => (rpm * Math.PI * 2) / 60;
@@ -25,7 +26,7 @@ const rpmToRadSec = (rpm: number) => (rpm * Math.PI * 2) / 60;
 function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.Element {
   const [targets, setTargets] = useState<number[]>(JOINTS.map(() => 0));
   const [actual, setActual] = useState<(number | undefined)[]>(JOINTS.map(() => undefined));
-  const [rpm, setRpm] = useState<[number, number]>([0, 0]);
+  const [rpm, setRpm] = useState<Pair>([0, 0]);
   const [feedbackReceived, setFeedbackReceived] = useState(false);
   const [armed, setArmed] = useState(false);
   const [jogSteps, setJogSteps] = useState<number[]>(JOINTS.map((j) => j.jog));
@@ -60,6 +61,7 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
   }, [context]);
 
   useEffect(() => {
+    // Let the installed Foxglove SDK infer its readonly RenderState type.
     context.onRender = (renderState, done) => {
       for (const event of renderState.currentFrame ?? []) {
         if (event.topic !== JOINT_STATES_TOPIC) continue;
@@ -75,10 +77,7 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
         const complete = next.every((v) => v !== undefined);
         feedbackRef.current = complete;
         setFeedbackReceived(complete);
-        if (!armedRef.current && complete) {
-          // Unarmed target edits are replaced with the measured positions.
-          updateTargets(next as number[]);
-        }
+        if (!armedRef.current && complete) updateTargets(next as number[]);
       }
       done();
     };
@@ -100,13 +99,13 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
   const setJointTarget = (index: number, value: number) => {
     if (!Number.isFinite(value)) return;
     const next = [...targetsRef.current];
-    next[index] = clamp(value, JOINTS[index]!.min, JOINTS[index]!.max);
+    const joint = JOINTS[index]!;
+    next[index] = clamp(value, joint.min, joint.max);
     updateTargets(next);
   };
 
   const jog = (index: number, direction: number) => {
     if (!publishReady) return;
-    // Base each jog on measured positions to avoid moving other axes to stale targets.
     const next = actualRef.current.map((value, i) => {
       const joint = JOINTS[i]!;
       const base = value!;
@@ -116,24 +115,27 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
     sendPositions(next);
   };
 
-  const sendWheelTargets = (next: [number, number]) => {
-    if (!context.publish || !armedRef.current) return;
+  const sendWheelTargets = (next: Pair) => {
+    if (!context.publish || !armedRef.current || !feedbackRef.current) return;
     context.publish(WHEEL_TOPIC, arrayMessage(next.map(rpmToRadSec)));
     rpmRef.current = next;
     setRpm(next);
     setStatus(`Wheel target sent: G0 ${next[0]}, G1 ${next[1]} RPM`);
   };
 
+  const zeroWheels = () => {
+    if (!context.publish || !publishingAvailable) return;
+    context.publish(WHEEL_TOPIC, arrayMessage([0, 0]));
+    rpmRef.current = [0, 0];
+    setRpm([0, 0]);
+    setStatus("Zero wheel target sent");
+  };
+
   const disarm = () => {
-    // Disarming the UI does not stop motors; send zero first while still armed.
-    if (armedRef.current && context.publish) {
-      context.publish(WHEEL_TOPIC, arrayMessage([0, 0]));
-      rpmRef.current = [0, 0];
-      setRpm([0, 0]);
-    }
+    if (armedRef.current) zeroWheels();
     armedRef.current = false;
     setArmed(false);
-    setStatus("UI disarmed; zero wheel target sent if publishing was available. Not an emergency stop.");
+    setStatus("UI disarmed. Zero wheel target attempted; this is not an emergency stop.");
   };
 
   return (
@@ -146,16 +148,17 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
       {!feedbackReceived && <p className="crane-warning">Waiting for all five positions on /joint_states. Jogging is disabled until feedback arrives.</p>}
       <div className="crane-armbar">
         <label><input type="checkbox" checked={armed} disabled={!publishingAvailable || !feedbackReceived} onChange={(e) => {
-          armedRef.current = e.target.checked;
-          setArmed(e.target.checked);
-          if (e.target.checked) updateTargets(actualRef.current as number[]);
-          else disarm();
+          if (e.target.checked) {
+            armedRef.current = true;
+            setArmed(true);
+            updateTargets(actualRef.current as number[]);
+          } else disarm();
         }} /> Enable commands</label>
         <button type="button" onClick={disarm}>Disarm + wheel zero</button>
       </div>
       <div className="crane-grid">
         <section className="crane-section">
-          <button className="crane-section-heading" type="button" onClick={() => setJointOpen(!jointOpen)} aria-expanded={jointOpen}>Joint positioning <span>{jointOpen ? "▾" : "▸"}</span></button>
+          <button className="crane-section-heading" type="button" onClick={() => setJointOpen((v) => !v)} aria-expanded={jointOpen}>Joint positioning <span>{jointOpen ? "▾" : "▸"}</span></button>
           {jointOpen && <div className="crane-section-content">
             {JOINTS.map((joint, i) => <div className="crane-joint" key={joint.name}>
               <div className="crane-joint-title"><strong>{joint.label}</strong><span>Actual: {actual[i]?.toFixed(3) ?? "—"} {joint.unit}</span></div>
@@ -170,25 +173,22 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
               }}/></label></div>
             </div>)}
             <div className="crane-actions"><button type="button" disabled={!publishReady} onClick={() => sendPositions(targetsRef.current)}>Send all targets</button><button type="button" disabled={!feedbackReceived} onClick={() => updateTargets(actualRef.current as number[])}>Copy measured positions</button></div>
-            <p className="crane-hint">Jog uses the latest measured positions for all five axes. “Send all” uses the edited targets.</p>
+            <p className="crane-hint">Jog uses measured positions for the other axes. “Send all” uses edited targets.</p>
           </div>}
         </section>
         <section className="crane-section">
-          <button className="crane-section-heading" type="button" onClick={() => setWheelOpen(!wheelOpen)} aria-expanded={wheelOpen}>Wheel RPM <span>{wheelOpen ? "▾" : "▸"}</span></button>
+          <button className="crane-section-heading" type="button" onClick={() => setWheelOpen((v) => !v)} aria-expanded={wheelOpen}>Wheel RPM <span>{wheelOpen ? "▾" : "▸"}</span></button>
           {wheelOpen && <div className="crane-section-content">
             {[0, 1].map((group) => <div className="crane-wheel" key={group}>
               <div className="crane-joint-title"><strong>Gimbal {group} wheels</strong><span>Target: {rpm[group]} RPM</span></div>
               <div className="crane-presets">{RPM_PRESETS.map((value) => <button key={value} type="button" className={rpm[group] === value ? "selected" : ""} disabled={!publishReady} onClick={() => {
-                const next: [number, number] = [...rpmRef.current] as [number, number];
+                const next: Pair = [...rpmRef.current] as Pair;
                 next[group] = value;
                 sendWheelTargets(next);
               }}>{value === 0 ? "0" : `${value / 1000}k`}</button>)}</div>
             </div>)}
-            <button className="crane-zero" type="button" disabled={!publishingAvailable} onClick={() => {
-              context.publish?.(WHEEL_TOPIC, arrayMessage([0, 0]));
-              rpmRef.current = [0, 0]; setRpm([0, 0]); setStatus("Zero wheel target sent");
-            }}>ZERO BOTH WHEEL TARGETS</button>
-            <p className="crane-hint">Setpoints change immediately. Ramp limiting and independent emergency stop must be implemented in the controller/firmware.</p>
+            <button className="crane-zero" type="button" disabled={!publishingAvailable} onClick={zeroWheels}>ZERO BOTH WHEEL TARGETS</button>
+            <p className="crane-hint">Setpoints change immediately. Ramp limiting and emergency stop belong in the controller/firmware.</p>
           </div>}
         </section>
       </div>
@@ -198,7 +198,32 @@ function CranePanel({ context }: { context: PanelExtensionContext }): React.JSX.
 }
 
 export function initCraneJointPanel(context: PanelExtensionContext): () => void {
-  const root = createRoot(context.panelElement);
+  // The host element is the scrollport. Chrome/Foxglove may otherwise constrain
+  // the React child to the panel's available height and clip its content.
+  const host = context.panelElement;
+  const original = {
+    overflow: host.style.overflow,
+    overflowX: host.style.overflowX,
+    overflowY: host.style.overflowY,
+    minHeight: host.style.minHeight,
+    minWidth: host.style.minWidth,
+    overscrollBehavior: host.style.overscrollBehavior,
+  };
+  host.style.overflowX = "hidden";
+  host.style.overflowY = "auto";
+  host.style.minHeight = "0";
+  host.style.minWidth = "0";
+  host.style.overscrollBehavior = "contain";
+
+  const root = createRoot(host);
   root.render(<CranePanel context={context} />);
-  return () => root.unmount();
+  return () => {
+    root.unmount();
+    host.style.overflow = original.overflow;
+    host.style.overflowX = original.overflowX;
+    host.style.overflowY = original.overflowY;
+    host.style.minHeight = original.minHeight;
+    host.style.minWidth = original.minWidth;
+    host.style.overscrollBehavior = original.overscrollBehavior;
+  };
 }
