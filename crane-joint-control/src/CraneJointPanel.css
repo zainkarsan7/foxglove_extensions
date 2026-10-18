@@ -1,5 +1,16 @@
-.crane-panel { width:100%; height:100%; min-width:0; box-sizing:border-box; overflow:auto; padding:12px; font:13px/1.4 system-ui,sans-serif; color:var(--crane-fg,inherit); container-type:inline-size; }
-.crane-panel * { box-sizing:border-box; }
+/* Foxglove's panelElement is the vertical scroll container (set in init). */
+.crane-panel {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  height: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  font: 13px/1.4 system-ui, sans-serif;
+  color: inherit;
+  container-type: inline-size;
+}
+.crane-panel * { box-sizing: border-box; }
 .crane-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
 .crane-header h2 { font-size:17px; margin:0 0 2px; }
 .crane-header small,.crane-hint,.crane-footer small { opacity:.7; }
@@ -14,7 +25,7 @@
 .crane-joint,.crane-wheel { padding:9px 0; border-bottom:1px solid color-mix(in srgb,currentColor 13%,transparent); }
 .crane-joint-title { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:7px; }
 .crane-joint-title span { opacity:.7; font-variant-numeric:tabular-nums; }
-.crane-joint-controls { display:grid; grid-template-columns:minmax(60px,1fr) minmax(60px,1fr) minmax(60px,1fr); gap:5px; }
+.crane-joint-controls { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
 .crane-joint-controls input { width:100%; min-width:0; text-align:center; }
 .crane-joint-step { margin-top:5px; }
 .crane-joint-step label { display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:11px; opacity:.85; }
@@ -31,4 +42,4 @@
 .crane-zero { width:100%; margin-top:12px; border-color:#d88541 !important; font-weight:700 !important; }
 .crane-footer { display:flex; flex-direction:column; gap:5px; padding:12px 0; overflow-wrap:anywhere; }
 @container (min-width:650px) { .crane-grid { grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); } }
-@container (max-width:270px) { .crane-joint-controls { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } .crane-joint-controls input { grid-column:1 / -1; grid-row:1; } }
+@container (max-width:270px) { .crane-joint-controls { grid-template-columns:repeat(2,minmax(0,1fr)); } .crane-joint-controls input { grid-column:1 / -1; grid-row:1; } }
